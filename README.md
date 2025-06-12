@@ -20,9 +20,12 @@ In **Method 1**, we leverage a pretrained ResNet152V2 model and fine‑tune it f
 
 ---
 
-## 🔧 Method 2: Alternative Approach (TBD)
+## 🔧 Method 2: Random Forest
 
-Details for the second classification strategy will be added soon.
+1. **Data Preprocessing**: 
+2. **Model Architecture**:
+3. **Training & Evaluation**:
+4. **Outputs**:
 
 ---
 
