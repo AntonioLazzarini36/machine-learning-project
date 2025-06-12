@@ -20,12 +20,9 @@ In **Method 1**, we leverage a pretrained ResNet152V2 model and fine‑tune it f
 
 ---
 
-## 🔧 Method 2: Random Forest
+## 🔧 Method 2: Alternative Approach (TBD)
 
-1. **Data Preprocessing**: 
-2. **Model Architecture**:
-3. **Training & Evaluation**:
-4. **Outputs**:
+Details for the second classification strategy will be added soon.
 
 ---
 
@@ -44,7 +41,9 @@ We provide a script to run live inference using your webcam. It:
 2. Run the demo notebook or script:
    ```bash
    python realtime_sign_recognition.py
-   ```
+````
+
+3. Press `q` to quit or `r` to reset prediction smoothing.
 
 ---
 
