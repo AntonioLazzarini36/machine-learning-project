@@ -1,212 +1,193 @@
-"""
-Real-Time Sign Language Recognition
-
-This script captures video from your webcam, detects a single hand using MediaPipe,
-extracts a region of interest (ROI) around the hand, preprocesses it to match the
-training input format (224×224 RGB), and feeds it into a fine-tuned ResNet152V2
-model to classify sign-language gestures (digits 0–9 + a–z). It smooths predictions
-over a short window for stability and overlays the predicted class and confidence
-on the live video feed.
-
-Requirements:
-  - TensorFlow & Keras (with ResNet152V2)
-  - OpenCV
-  - MediaPipe
-  - numpy
-
-Usage:
-  1. Place your pretrained model file `best_sign_lang_finetuned.h5` in the working dir. (Current version from method 1 can be used here, achieves 80% accuracy: https://mega.nz/file/obZygDzL#9L_vIn4CarApTnz0GeBqrQoqeYEmWIjLo77WD9CvZrE)
-  2. Run the script. Press ‘q’ to quit, ‘r’ to reset smoothing.
-"""
-
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' # Suppress TensorFlow INFO messages
+
+import sys
 import cv2
 import numpy as np
 import tensorflow as tf
 import mediapipe as mp
-from tensorflow.keras import layers, models
-from tensorflow.keras.applications import ResNet152V2
-from tensorflow.keras.regularizers import l2
 
-# === MediaPipe Hand-Detection Setup ===
+# --- MediaPipe Setup ---
+# Initialize MediaPipe solutions for hand tracking and selfie segmentation.
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
-    static_image_mode=False,       # Continuous video stream
-    max_num_hands=1,               # Only one hand at a time
-    min_detection_confidence=0.7,  # Detection threshold
-    min_tracking_confidence=0.5    # Tracking threshold
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.7,
+    min_tracking_confidence=0.5
 )
 mp_draw = mp.solutions.drawing_utils
 
-# === PARAMETERS & CLASS DEFINITIONS ===
-MODEL_FILE = 'best_sign_lang_finetuned.h5'
-IMG_SIZE = (224, 224)  # Model’s expected input dimensions
-# Classes: digits 0–9, then letters a–z
+mp_selfie_segmentation = mp.solutions.selfie_segmentation
+segmentation = mp_selfie_segmentation.SelfieSegmentation(model_selection=1)
+
+# --- Parameters ---
+# IMPORTANT: Change this to the name of your TensorFlow Lite model file.
+MODEL_FILE = 'model.tflite'
+# The size your model expects.
+IMG_SIZE = (128, 128)
+# The user-requested resolution. Note: (128, 128) means no quality reduction.
+INTERMEDIATE_RESOLUTION = (128, 128)
+# List of class names for mapping predictions to labels.
 class_names = list(map(str, range(10))) + list('abcdefghijklmnopqrstuvwxyz')
-NUM_CLASSES = len(class_names)
 
-# === VERIFY MODEL EXISTS ===
-if not os.path.exists(MODEL_FILE):
-    raise FileNotFoundError(f"Model file not found: {os.path.abspath(MODEL_FILE)}")
+def load_tflite_model(model_path):
+    """Loads a TFLite model, allocates tensors, and returns the interpreter."""
+    if not os.path.exists(model_path):
+        print(f"Error: Model file not found at '{os.path.abspath(model_path)}'")
+        print(f"Please make sure '{MODEL_FILE}' is in the same directory as the script.")
+        sys.exit(1)
 
-# === MODEL CREATION FUNCTION ===
-def create_model(num_classes, input_shape):
+    print(f"Loading TFLite model from '{model_path}'...")
+    try:
+        # Load the TFLite model and allocate tensors.
+        interpreter = tf.lite.Interpreter(model_path=model_path)
+        interpreter.allocate_tensors()
+        print("✓ TFLite model loaded successfully.")
+        return interpreter
+    except Exception as e:
+        print(f"Failed to load TFLite model: {e}")
+        sys.exit(1)
+
+def preprocess_for_model(roi, input_details):
     """
-    Reconstruct the fine-tuned ResNet152V2 architecture:
-      - Pretrained base (no top)
-      - BatchNorm + Dense + Dropout layers matching training script
+    Preprocesses the Region of Interest (ROI) to match the model's input requirements.
     """
-    base = ResNet152V2(
-        include_top=False,
-        weights='imagenet',
-        input_shape=input_shape,
-        pooling='avg'
-    )
-    model = models.Sequential([
-        base,
-        layers.BatchNormalization(),
-        layers.Dense(1024, activation='relu', kernel_regularizer=l2(0.01)),
-        layers.Dropout(0.5),
-        layers.Dense(512, activation='relu', kernel_regularizer=l2(0.01)),
-        layers.Dropout(0.3),
-        layers.Dense(256, activation='relu', kernel_regularizer=l2(0.01)),
-        layers.Dropout(0.2),
-        layers.Dense(num_classes, activation='softmax')
-    ])
-    return model
+    # 1. Downscale to an intermediate size. Using INTER_AREA is good for shrinking.
+    low_res_roi = cv2.resize(roi, INTERMEDIATE_RESOLUTION, interpolation=cv2.INTER_AREA)
 
-# === LOAD OR RECONSTRUCT MODEL ===
-print("Loading model...")
-try:
-    # Try loading full model
-    model = tf.keras.models.load_model(MODEL_FILE, compile=False)
-    print(f"✓ Loaded complete model from {MODEL_FILE}")
-except Exception as e:
-    print(f"Complete load failed: {e}\nRecreating architecture and loading weights…")
-    model = create_model(NUM_CLASSES, IMG_SIZE + (3,))
-    model.load_weights(MODEL_FILE)
-    print(f"✓ Recreated model and loaded weights from {MODEL_FILE}")
+    # 2. Convert to grayscale.
+    gray_roi = cv2.cvtColor(low_res_roi, cv2.COLOR_BGR2GRAY)
 
-model.trainable = False  # Inference mode
+    # 3. Upscale back to the model's expected input size. INTER_LINEAR gives a softer look.
+    upscaled_roi = cv2.resize(gray_roi, IMG_SIZE, interpolation=cv2.INTER_LINEAR)
 
-# === IMAGE PREPROCESSING ===
-def preprocess_image(roi):
-    """
-    - Resize to 224×224
-    - Normalize pixel values to [0,1]
-    - Add batch dimension
-    """
-    resized = cv2.resize(roi, IMG_SIZE)
-    normalized = resized.astype(np.float32) / 255.0
-    return np.expand_dims(normalized, axis=0)
+    # 4. Reshape for the model: (128, 128) -> (1, 128, 128, 1)
+    #    The TFLite model expects a batch dimension.
+    img_reshaped = np.reshape(upscaled_roi, (1, IMG_SIZE[0], IMG_SIZE[1], 1))
 
-# === PREDICTION SMOOTHING ===
-class PredictionSmoother:
-    def __init__(self, window_size=5):
-        self.window_size = window_size
-        self.predictions = []
+    # 5. Normalize and convert to the correct data type for the model.
+    #    TFLite models are often quantized or expect a specific float type.
+    input_type = input_details[0]['dtype']
+    img_processed = img_reshaped.astype(input_type)
+    if np.issubdtype(input_type, np.floating):
+        img_processed = img_processed / 255.0
 
-    def update(self, prediction):
-        self.predictions.append(prediction)
-        if len(self.predictions) > self.window_size:
-            self.predictions.pop(0)
-        return np.mean(self.predictions, axis=0)
+    # Create a displayable version of the image that's being fed to the model.
+    displayable_image = cv2.cvtColor(upscaled_roi, cv2.COLOR_GRAY2BGR)
 
-smoother = PredictionSmoother(window_size=3)
+    return img_processed, displayable_image
 
-# === WEBCAM SETUP ===
-print("Opening camera…")
-cap = cv2.VideoCapture(0)
-if not cap.isOpened():
-    raise IOError("Cannot open webcam. Check device & permissions.")
+def tflite_predict(interpreter, model_input, input_details, output_details):
+    """Performs inference using the TFLite interpreter."""
+    # Set the value of the input tensor.
+    interpreter.set_tensor(input_details[0]['index'], model_input)
+    
+    # Run the inference.
+    interpreter.invoke()
+    
+    # Get the results.
+    preds = interpreter.get_tensor(output_details[0]['index'])[0]
+    return preds
 
-# Improve capture quality
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-cap.set(cv2.CAP_PROP_FPS, 30)
-print("✓ Camera opened. Press 'q' to quit, 'r' to reset smoothing.")
+def main():
+    """Main function to run the camera and real-time prediction."""
+    # Load the TFLite model and get its input and output details.
+    interpreter = load_tflite_model(MODEL_FILE)
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    
+    # Print model input/output details to help with debugging.
+    print("\n--- Model Details ---")
+    print(f"Input Shape: {input_details[0]['shape']}")
+    print(f"Input Type: {input_details[0]['dtype']}")
+    print(f"Output Shape: {output_details[0]['shape']}")
+    print(f"Output Type: {output_details[0]['dtype']}")
+    print("---------------------\n")
 
-# === MAIN LOOP ===
-frame_count = 0
-prediction_text = ""
-confidence_threshold = 0.5
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("Failed to grab frame")
-        break
+    print("Opening camera...")
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: Cannot open webcam.")
+        sys.exit(1)
+    print("✓ Camera opened. Press 'q' to quit.")
 
-    frame = cv2.flip(frame, 1)  # Mirror image
-    h, w, _ = frame.shape
+    prediction_text = ""
+    confidence_threshold = 0.5 # Only show predictions with >50% confidence
 
-    # Detect hands
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands.process(rgb)
+    processed_view = np.zeros((IMG_SIZE[0], IMG_SIZE[1], 3), dtype=np.uint8)
 
-    # Overlay instructions
-    cv2.putText(frame, "Show your hand sign", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
-    cv2.putText(frame, "Press 'q' to quit", (10, h-20),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to grab frame.")
+                break
 
-    if results.multi_hand_landmarks:
-        # Process first hand
-        for landmarks in results.multi_hand_landmarks:
-            mp_draw.draw_landmarks(frame, landmarks, mp_hands.HAND_CONNECTIONS)
+            # Flip for selfie view and get dimensions
+            frame = cv2.flip(frame, 1)
+            h, w, _ = frame.shape
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # Compute bounding box
-            pts = np.array([[int(lm.x*w), int(lm.y*h)] for lm in landmarks.landmark])
-            x_min, y_min = np.min(pts, axis=0) - 40
-            x_max, y_max = np.max(pts, axis=0) + 40
-            x_min, y_min = max(0, x_min), max(0, y_min)
-            x_max, y_max = min(w, x_max), min(h, y_max)
+            # --- Segmentation and Hand Detection ---
+            seg_results = segmentation.process(rgb_frame)
+            condition = np.stack((seg_results.segmentation_mask,) * 3, axis=-1) > 0.1
+            bg_image = np.zeros(frame.shape, dtype=np.uint8)
+            segmented_frame = np.where(condition, frame, bg_image)
+            hand_results = hands.process(rgb_frame)
 
-            cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0,255,0), 2)
-            roi = frame[y_min:y_max, x_min:x_max]
+            if hand_results.multi_hand_landmarks:
+                for landmarks in hand_results.multi_hand_landmarks:
+                    # Draw landmarks on the original frame
+                    mp_draw.draw_landmarks(frame, landmarks, mp_hands.HAND_CONNECTIONS)
+                    
+                    # Calculate bounding box for the hand
+                    pts = np.array([[int(lm.x * w), int(lm.y * h)] for lm in landmarks.landmark])
+                    x_min, y_min = np.min(pts, axis=0)
+                    x_max, y_max = np.max(pts, axis=0)
+                    
+                    # Add padding to the bounding box
+                    padding = 50
+                    x_min, y_min = max(0, x_min - padding), max(0, y_min - padding)
+                    x_max, y_max = min(w, x_max + padding), min(h, y_max + padding)
 
-            if roi.size and roi.shape[0]>50 and roi.shape[1]>50:
-                processed = preprocess_image(roi)
-                if frame_count % 3 == 0:
-                    preds = model.predict(processed, verbose=0)[0]
-                    sm = smoother.update(preds)
-                    top_i = np.argmax(sm)
-                    conf = sm[top_i]
-                    if conf > confidence_threshold:
-                        prediction_text = f"{class_names[top_i].upper()} ({conf*100:.1f}%)"
-                    else:
-                        prediction_text = "Low confidence"
+                    # Extract the Region of Interest (ROI) from the segmented frame
+                    roi = segmented_frame[y_min:y_max, x_min:x_max]
 
-                # Draw prediction
-                if prediction_text:
-                    tw, th = cv2.getTextSize(prediction_text, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
-                    cv2.rectangle(frame, (x_min, y_min-40), (x_min+tw+10, y_min-5), (0,255,0), -1)
-                    cv2.putText(frame, prediction_text, (x_min+5, y_min-15),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2)
+                    if roi.size > 0:
+                        # Preprocess the ROI for the TFLite model
+                        model_input, display_img = preprocess_for_model(roi, input_details)
+                        processed_view = display_img
+                        
+                        # Get predictions from the TFLite model
+                        preds = tflite_predict(interpreter, model_input, input_details, output_details)
+                        
+                        top_index = np.argmax(preds)
+                        confidence = preds[top_index]
 
-                    # Show small ROI for debugging
-                    small = cv2.resize(roi, (100,100))
-                    frame[10:110, w-110:w-10] = small
-                    cv2.rectangle(frame, (w-110,10), (w-10,110), (255,255,255),2)
-    else:
-        if frame_count % 10 == 0:
-            prediction_text = ""
+                        if confidence > confidence_threshold:
+                            prediction_text = f"{class_names[top_index].upper()} ({confidence*100:.1f}%)"
+                        else:
+                            prediction_text = "..."
 
-    frame_count += 1
-    if frame_count % 30 == 0:
-        cv2.putText(frame, f"Frame: {frame_count}", (w-150, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+                    # Draw the bounding box and prediction text on the frame
+                    cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+                    cv2.putText(frame, prediction_text, (x_min, y_min - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            else:
+                 prediction_text = ""
 
-    cv2.imshow('Sign Language Recognition', frame)
-    key = cv2.waitKey(1) & 0xFF
-    if key == ord('q'):
-        break
-    elif key == ord('r'):
-        smoother = PredictionSmoother(window_size=3)
-        prediction_text = ""
-        print("Smoothing reset")
+            # Display the output
+            cv2.imshow('Live Sign Recognition', frame)
+            cv2.imshow('Processed View for Model', processed_view)
 
-# Cleanup
-cap.release()
-cv2.destroyAllWindows()
-print("Camera released and windows closed.")
+            if cv2.waitKey(5) & 0xFF == ord('q'):
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        print("Camera released and windows closed.")
+
+if __name__ == '__main__':
+    main()
