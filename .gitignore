@@ -7,6 +7,8 @@ __pycache__/
 *.so
 *.npy
 *.joblib
+
+/rf_venv/
 # Distribution / packaging
 .Python
 build/
