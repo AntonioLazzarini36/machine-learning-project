@@ -6,7 +6,6 @@ __pycache__/
 # C extensions
 *.so
 *.npy
-*.joblib
 
 /rf_venv/
 # Distribution / packaging
