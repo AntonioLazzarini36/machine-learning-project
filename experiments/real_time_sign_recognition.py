@@ -1,5 +1,8 @@
+'''
+Test program that uses a pretrained TFLite model for real-time sign language recognition from webcam input
+'''
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' # Suppress TensorFlow INFO messages
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
 
 import sys
 import cv2
@@ -7,8 +10,6 @@ import numpy as np
 import tensorflow as tf
 import mediapipe as mp
 
-# --- MediaPipe Setup ---
-# Initialize MediaPipe solutions for hand tracking and selfie segmentation.
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,

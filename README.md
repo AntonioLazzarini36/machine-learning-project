@@ -4,62 +4,41 @@ This repository implements a sign language recognition system using machine lear
 
 ---
 
-## 🔍 Method 1: Transfer Learning with CNN
+## 🔍 Method 1: Convolutional Neural Network (CNN)
 
-In **Method 1**, we leverage a pretrained ResNet152V2 model and fine‑tune it for sign language classification:
+In **Method 1**, we use a custom-built Convolutional Neural Network (CNN) for sign language classification. This method is runnable in Google Colab.
 
-1. **Data Preprocessing**: Images are resized to 224×224 pixels and normalized to [0,1].
-2. **Model Architecture**:
-   - Base: ResNet152V2 (imagenet weights, without top layers)
-   - Custom head: BatchNormalization → Dense(1024) → Dropout → Dense(512) → Dropout → Dense(256) → Dropout → Dense(36, softmax)
-   - L2 regularization and dropout are used to reduce overfitting.
-3. **Training & Evaluation**: The model achieves ~80% accuracy on the held-out test set.
-4. **Outputs**:
-   - Saved model file: `best_sign_lang_finetuned.h5`
-   - Training curves and evaluation metrics saved in the notebook.
+1.  **Data Preprocessing**: Images are resized to 128x128 pixels and normalized to a [0,1] range. Data augmentation techniques like random flips, brightness/contrast adjustments, and rotations are applied to the training set to improve model generalization.
+2.  **Model Architecture**:
+    * The CNN consists of four convolutional blocks with increasing filter sizes (32, 64, 128, 256), each followed by Batch Normalization and MaxPooling.
+    * Dropout is used after the second and fourth blocks to prevent overfitting.
+    * The convolutional base is connected to a dense layer of 512 units with L2 regularization, followed by a final softmax output layer for 36 classes (0-9, a-z).
+3.  **Training & Evaluation**: The model is trained using the Adam optimizer and callbacks like `ModelCheckpoint`, `ReduceLROnPlateau`, and `EarlyStopping`. On notebook evaluation, the model achieves **~90% accuracy** on the held-out test set.
+4.  **Outputs**:
+    * The final trained model is quantized to reduce its size and saved in the `models/` folder.
+    * Training curves and evaluation metrics are saved in the notebook.
 
 ---
 
-## 🔧 Method 2: Alternative Approach (TBD)
+## 🔧 Method 2: Random Forest
 
-Details for the second classification strategy will be added soon.
+In **Method 2**, we use a Random Forest classifier for hand gesture classification.
+
+1.  **Data Preprocessing**: The image data from the `SignLangDataset` is used for training the model.
+2.  **Model Architecture**: A Random Forest model is trained on the image data.
+3.  **Training & Evaluation**: On notebook evaluation, the model achieves **~70% accuracy**.
+4.  **Outputs**:
+    * The trained Random Forest model is saved using `joblib` and located in the `models/` folder.
 
 ---
 
 ## 🎥 Real-Time Sign Recognition Demo
 
-We provide a script to run live inference using your webcam. It:
+We provide a script to run live inference using your webcam. This demo uses the quantized CNN model from **Method 1**. It:
 
-- Captures frames from the camera.
-- Uses MediaPipe to detect and track a single hand.
-- Extracts a bounding box around the hand and preprocesses the ROI.
-- Feeds the ROI into the fine-tuned model, smooths predictions over a window for stability, and overlays the result on the video.
+-   Captures frames from the camera.
+-   Uses MediaPipe to detect and track a single hand.
+-   Extracts a bounding box around the hand and preprocesses the ROI.
+-   Feeds the ROI into the model, smooths predictions over a window for stability, and overlays the result on the video.
 
-**Usage**:
-
-1. Place or download the pretrained model (`best_sign_lang_finetuned.h5`).
-2. Run the demo notebook or script:
-   ```bash
-   python realtime_sign_recognition.py
-````
-
-3. Press `q` to quit or `r` to reset prediction smoothing.
-
----
-
-## 📥 Download Links
-
-* **Pretrained Model (80% accuracy)** on MEGA:
-
-  ```
-  https://mega.nz/file/obZygDzL#9L_vIn4CarApTnz0GeBqrQoqeYEmWIjLo77WD9CvZrE
-  ```
-
-* **Dataset Archive** (`sign_lang_train.zip`) on MEGA:
-
-  ```
-  https://mega.nz/file/FLITlD7C#GbU0J0Yc3v9GLYKDm4os_a2-Ib9YTnBf5vwLSi4iC08
-  ```
-
-
----
+Press `q` to quit the demo or `r` to reset prediction smoothing.
