@@ -21,14 +21,11 @@ mp_draw = mp.solutions.drawing_utils
 mp_selfie_segmentation = mp.solutions.selfie_segmentation
 segmentation = mp_selfie_segmentation.SelfieSegmentation(model_selection=1)
 
-# --- Parameters ---
-# IMPORTANT: Change this to the name of your TensorFlow Lite model file.
-MODEL_FILE = 'model.tflite'
-# The size your model expects.
+MODEL_FILE = os.path.join(os.path.dirname(__file__), '..', 'models', 'model1.tflite')
+
 IMG_SIZE = (128, 128)
-# The user-requested resolution. Note: (128, 128) means no quality reduction.
 INTERMEDIATE_RESOLUTION = (128, 128)
-# List of class names for mapping predictions to labels.
+
 class_names = list(map(str, range(10))) + list('abcdefghijklmnopqrstuvwxyz')
 
 def load_tflite_model(model_path):
@@ -40,7 +37,6 @@ def load_tflite_model(model_path):
 
     print(f"Loading TFLite model from '{model_path}'...")
     try:
-        # Load the TFLite model and allocate tensors.
         interpreter = tf.lite.Interpreter(model_path=model_path)
         interpreter.allocate_tensors()
         print("✓ TFLite model loaded successfully.")
@@ -80,7 +76,6 @@ def preprocess_for_model(roi, input_details):
 
 def tflite_predict(interpreter, model_input, input_details, output_details):
     """Performs inference using the TFLite interpreter."""
-    # Set the value of the input tensor.
     interpreter.set_tensor(input_details[0]['index'], model_input)
     
     # Run the inference.
@@ -92,12 +87,10 @@ def tflite_predict(interpreter, model_input, input_details, output_details):
 
 def main():
     """Main function to run the camera and real-time prediction."""
-    # Load the TFLite model and get its input and output details.
     interpreter = load_tflite_model(MODEL_FILE)
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
     
-    # Print model input/output details to help with debugging.
     print("\n--- Model Details ---")
     print(f"Input Shape: {input_details[0]['shape']}")
     print(f"Input Type: {input_details[0]['dtype']}")
@@ -114,7 +107,7 @@ def main():
     print("✓ Camera opened. Press 'q' to quit.")
 
     prediction_text = ""
-    confidence_threshold = 0.5 # Only show predictions with >50% confidence
+    confidence_threshold = 0.5 
 
     processed_view = np.zeros((IMG_SIZE[0], IMG_SIZE[1], 3), dtype=np.uint8)
 
@@ -125,7 +118,6 @@ def main():
                 print("Failed to grab frame.")
                 break
 
-            # Flip for selfie view and get dimensions
             frame = cv2.flip(frame, 1)
             h, w, _ = frame.shape
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -171,14 +163,12 @@ def main():
                         else:
                             prediction_text = "..."
 
-                    # Draw the bounding box and prediction text on the frame
                     cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
                     cv2.putText(frame, prediction_text, (x_min, y_min - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             else:
                  prediction_text = ""
 
-            # Display the output
             cv2.imshow('Live Sign Recognition', frame)
             cv2.imshow('Processed View for Model', processed_view)
 
